@@ -1,0 +1,10 @@
+flask
+flask-cors
+google-generativeai
+langchain-community
+langchain-text-splitters
+faiss-cpu
+langchain-huggingface
+sentence-transformers
+pypdf
+python-dotenv

@@ -1,5 +1,8 @@
 import os
 import logging
+from dotenv import load_dotenv
+
+load_dotenv()
 from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS
 import google.generativeai as genai
@@ -19,7 +22,10 @@ app = Flask(__name__)
 CORS(app)
 
 # ---------- Gemini API ----------
-genai.configure(api_key="AIzaSyBP8EqIBoSks-RwAJtPUrRgW4UiJiW5Ras")  # 🔴 PUT YOUR KEY HERE
+api_key = os.getenv("GEMINI_API_KEY")
+if not api_key:
+    logger.error("GEMINI_API_KEY not found in environment variables.")
+genai.configure(api_key=api_key)
 model = genai.GenerativeModel("gemini-2.5-flash")
 
 # ---------- Load Models ----------
