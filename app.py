@@ -23,50 +23,14 @@ CORS(app)
 
 # ---------- Gemini API ----------
 api_key = os.getenv("GEMINI_API_KEY")
-if not api_key:
-    logger.error("GEMINI_API_KEY not found in environment variables.")
 genai.configure(api_key=api_key)
 model = genai.GenerativeModel("gemini-2.5-flash")
 
-# ---------- Load Models ----------
-logger.info("Loading models...")
-
-embedding_model = HuggingFaceEmbeddings(
-    model_name="sentence-transformers/all-mpnet-base-v2",
-    encode_kwargs={"normalize_embeddings": True},
-)
-
-reranker = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
-
-# ---------- Load & Index Documents ----------
-FILE_PATH = "medical"
-
-try:
-    if not os.path.exists(FILE_PATH):
-        os.makedirs(FILE_PATH)
-        logger.info(f"Created '{FILE_PATH}' directory. Add PDFs there.")
-
-    loader = PyPDFDirectoryLoader(FILE_PATH)
-    docs = loader.load()
-    logger.info(f"Loaded {len(docs)} documents")
-
-    if not docs:
-        logger.warning("No PDFs found!")
-        vector_store = None
-        retriever = None
-    else:
-        splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
-        split_docs = splitter.split_documents(docs)
-
-        vector_store = FAISS.from_documents(split_docs, embedding_model)
-        retriever = vector_store.as_retriever(search_kwargs={"k": 10})
-
-        logger.info("RAG system ready!")
-
-except Exception as e:
-    logger.error(f"Error loading docs: {e}")
-    vector_store = None
-    retriever = None
+# ✅ IMPORTANT: Lazy loading placeholders
+embedding_model = None
+reranker = None
+vector_store = None
+retriever = None
 
 # ---------- Rerank ----------
 def rerank(query: str, docs, top_k: int = 3):
@@ -102,13 +66,12 @@ Question:
 
 Answer in 1-3 sentences.
 """
-
         response = model.generate_content(prompt)
         return response.text.strip()
 
     except Exception as e:
         logger.error(f"Gemini error: {e}")
-        return "Sorry, I encountered an error while processing your request."
+        return "Error while processing request."
 
 # ---------- Routes ----------
 @app.route("/")
@@ -118,6 +81,8 @@ def index():
 @app.route("/ask", methods=["POST"])
 def ask_question():
     try:
+        global embedding_model, reranker, vector_store, retriever
+
         data = request.get_json()
         query = data.get("query", "")
 
@@ -126,12 +91,40 @@ def ask_question():
 
         logger.info(f"Query: {query}")
 
-        if not retriever:
-            return jsonify({
-                "query": query,
-                "answer": "Medical database empty. Add PDFs to 'medical' folder.",
-                "sources": []
-            })
+        # ✅ Lazy load models
+        if embedding_model is None:
+            logger.info("Loading embedding model...")
+            embedding_model = HuggingFaceEmbeddings(
+                model_name="sentence-transformers/all-mpnet-base-v2",
+                encode_kwargs={"normalize_embeddings": True},
+            )
+
+        if reranker is None:
+            logger.info("Loading reranker...")
+            reranker = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
+
+        if vector_store is None:
+            logger.info("Loading documents...")
+            FILE_PATH = "medical"
+
+            if not os.path.exists(FILE_PATH):
+                os.makedirs(FILE_PATH)
+
+            loader = PyPDFDirectoryLoader(FILE_PATH)
+            docs = loader.load()
+
+            if not docs:
+                return jsonify({
+                    "query": query,
+                    "answer": "No PDFs found in medical folder.",
+                    "sources": []
+                })
+
+            splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
+            split_docs = splitter.split_documents(docs)
+
+            vector_store = FAISS.from_documents(split_docs, embedding_model)
+            retriever = vector_store.as_retriever(search_kwargs={"k": 10})
 
         # Retrieve
         initial_docs = retriever.invoke(query)
@@ -142,28 +135,16 @@ def ask_question():
         if not final_docs:
             return jsonify({
                 "query": query,
-                "answer": "I couldn't find information regarding this in our database.",
+                "answer": "No relevant info found.",
                 "sources": []
             })
 
-        # Context
         context_text = "\n\n".join(doc.page_content for doc in final_docs)
-
-        # Generate Answer
         answer = generate_answer(query, context_text)
-
-        sources = [
-            {
-                "content": doc.page_content[:200] + "...",
-                "metadata": doc.metadata
-            }
-            for doc in final_docs
-        ]
 
         return jsonify({
             "query": query,
-            "answer": answer,
-            "sources": sources
+            "answer": answer
         })
 
     except Exception as e:
@@ -172,5 +153,5 @@ def ask_question():
 
 # ---------- Run ----------
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8000))  # ✅ FIX for Render
+    port = int(os.environ.get("PORT", 8000))
     app.run(host="0.0.0.0", port=port)
