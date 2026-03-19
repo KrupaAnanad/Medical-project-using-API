@@ -9,3 +9,4 @@ sentence-transformers
 pypdf
 python-dotenv
 gunicorn
+PYTHON_VERSION = 3.10.13
